@@ -1,5 +1,5 @@
 {
-  "name": "node-mac-permissions",
+  "name": "@0biwank/node-mac-permissions",
   "version": "2.5.0",
   "description": "A native node module to manage system permissions on macOS",
   "main": "index.js",
@@ -14,7 +14,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/codebytere/node-mac-permissions.git"
+    "url": "git+https://github.com/0biwan-ops/node-mac-permissions.git"
   },
   "keywords": [
     "permissions",
@@ -23,12 +23,13 @@
     "napi",
     "native"
   ],
-  "author": "Shelley Vohr <shelley.vohr@gmail.com>",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/codebytere/node-mac-permissions/issues"
+  "author": {
+    "name": "Kunal Dubey",
+    "email": "kunal@capitalcompute.com",
+    "url": "https://www.kunaldubey.tech"
   },
-  "homepage": "https://github.com/codebytere/node-mac-permissions#readme",
+  "license": "MIT",
+  "homepage": "https://github.com/0biwan-ops/node-mac-permissions#readme",
   "dependencies": {
     "bindings": "^1.5.0",
     "node-addon-api": "^7.1.0"

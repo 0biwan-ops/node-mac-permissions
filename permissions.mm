@@ -12,8 +12,7 @@
 #import <IOKit/hidsystem/IOHIDLib.h>
 #import <Photos/Photos.h>
 #import <Speech/Speech.h>
-#import <StoreKit/StoreKit.h>
-#import <UserNotifications/UserNotifications.h>
+#import <Storekit/Storekit.h>
 #import <pwd.h>
 
 /***** HELPER FUNCTIONS *****/
@@ -23,48 +22,10 @@ const std::string kDenied{"denied"};
 const std::string kRestricted{"restricted"};
 const std::string kNotDetermined{"not determined"};
 const std::string kLimited{"limited"};
-const std::string kProvisional{"provisional"};
-
-// Check if a bundle ID is valid (i.e., corresponds to an installed app)
-bool IsValidBundleID(NSString *bundleID) {
-  if (!bundleID)
-    return false;
-
-  CFArrayRef appURLs = LSCopyApplicationURLsForBundleIdentifier(
-      (__bridge CFStringRef)bundleID, NULL);
-
-  if (appURLs) {
-    CFRelease(appURLs);
-    return true;
-  }
-
-  return false;
-}
-
-std::string CheckFileAccessLevel(NSString *path) {
-  int fd = open([path cStringUsingEncoding:kCFStringEncodingUTF8], O_RDONLY);
-  if (fd != -1) {
-    close(fd);
-    return kAuthorized;
-  }
-
-  if (errno == ENOENT)
-    return kNotDetermined;
-
-  if (errno == EPERM || errno == EACCES)
-    return kDenied;
-
-  return kNotDetermined;
-}
 
 PHAccessLevel GetPHAccessLevel(const std::string &type)
     API_AVAILABLE(macosx(10.16)) {
   return type == "read-write" ? PHAccessLevelReadWrite : PHAccessLevelAddOnly;
-}
-
-IOHIDRequestType GetInputMonitoringAccessType(const std::string &type) {
-  return type == "post" ? kIOHIDRequestTypePostEvent
-                        : kIOHIDRequestTypeListenEvent;
 }
 
 NSURL *URLForDirectory(NSSearchPathDirectory directory) {
@@ -106,21 +67,9 @@ StringFromMusicLibraryStatus(SKCloudServiceAuthorizationStatus status)
   }
 }
 
-const std::string &StringFromNotificationStatus(UNAuthorizationStatus status) {
-  switch (status) {
-  case UNAuthorizationStatusAuthorized:
-    return kAuthorized;
-  case UNAuthorizationStatusDenied:
-    return kDenied;
-  case UNAuthorizationStatusProvisional:
-    return kProvisional;
-  default:
-    return kNotDetermined;
-  }
-}
-
-std::string StringFromSpeechRecognitionStatus(
-    SFSpeechRecognizerAuthorizationStatus status) {
+std::string
+StringFromSpeechRecognitionStatus(SFSpeechRecognizerAuthorizationStatus status)
+    API_AVAILABLE(macosx(10.15)) {
   switch (status) {
   case SFSpeechRecognizerAuthorizationStatusAuthorized:
     return kAuthorized;
@@ -233,29 +182,37 @@ std::string ContactAuthStatus() {
 
 // Returns a status indicating whether the user has authorized Bluetooth access.
 std::string BluetoothAuthStatus() {
-  switch ([CBCentralManager authorization]) {
-  case CBManagerAuthorizationAllowedAlways:
-    return kAuthorized;
-  case CBManagerAuthorizationDenied:
-    return kDenied;
-  case CBManagerAuthorizationRestricted:
-    return kRestricted;
-  default:
-    return kNotDetermined;
+  if (@available(macOS 10.15, *)) {
+    switch ([CBCentralManager authorization]) {
+    case CBManagerAuthorizationAllowedAlways:
+      return kAuthorized;
+    case CBManagerAuthorizationDenied:
+      return kDenied;
+    case CBManagerAuthorizationRestricted:
+      return kRestricted;
+    default:
+      return kNotDetermined;
+    }
   }
+
+  return kAuthorized;
 }
 
 // Returns a status indicating whether the user has authorized
 // input monitoring access.
 std::string InputMonitoringAuthStatus() {
-  switch (IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)) {
-  case kIOHIDAccessTypeGranted:
-    return kAuthorized;
-  case kIOHIDAccessTypeDenied:
-    return kDenied;
-  default:
-    return kNotDetermined;
+  if (@available(macOS 10.15, *)) {
+    switch (IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)) {
+    case kIOHIDAccessTypeGranted:
+      return kAuthorized;
+    case kIOHIDAccessTypeDenied:
+      return kDenied;
+    default:
+      return kNotDetermined;
+    }
   }
+
+  return kAuthorized;
 }
 
 // Returns a status indicating whether the user has authorized Apple Music
@@ -277,8 +234,7 @@ std::string EventAuthStatus(const std::string &type) {
       (type == "calendar") ? EKEntityTypeEvent : EKEntityTypeReminder;
 
   switch ([EKEventStore authorizationStatusForEntityType:entity_type]) {
-  case EKAuthorizationStatusWriteOnly:
-  case EKAuthorizationStatusFullAccess:
+  case EKAuthorizationStatusAuthorized:
     return kAuthorized;
   case EKAuthorizationStatusDenied:
     return kDenied;
@@ -291,28 +247,25 @@ std::string EventAuthStatus(const std::string &type) {
 
 // Returns a status indicating whether the user has Full Disk Access.
 std::string FDAAuthStatus() {
-  NSString *home_folder = GetUserHomeFolderPath();
-  NSMutableArray<NSString *> *files = [[NSMutableArray alloc]
-      initWithObjects:
-          [home_folder
-              stringByAppendingPathComponent:@"Library/Safari/Bookmarks.plist"],
-          [home_folder
-              stringByAppendingPathComponent:
-                  @"/Library/Application Support/com.apple.TCC/TCC.db"],
-          @"/Library/Preferences/com.apple.TimeMachine.plist",
-          [home_folder
-              stringByAppendingPathComponent:@"Library/Safari/CloudTabs.db"],
-          nil];
-
   std::string auth_status = kNotDetermined;
-  for (NSString *file in files) {
-    const std::string can_read = CheckFileAccessLevel(file);
-    if (can_read == kAuthorized) {
-      auth_status = kAuthorized;
-      break;
-    } else if (can_read == kDenied) {
-      auth_status = kDenied;
-    }
+  NSString *path;
+  NSString *home_folder = GetUserHomeFolderPath();
+
+  if (@available(macOS 10.15, *)) {
+    path = [home_folder
+        stringByAppendingPathComponent:@"Library/Safari/CloudTabs.db"];
+  } else {
+    path = [home_folder
+        stringByAppendingPathComponent:@"Library/Safari/Bookmarks.plist"];
+  }
+
+  NSFileManager *manager = [NSFileManager defaultManager];
+  BOOL file_exists = [manager fileExistsAtPath:path];
+  NSData *data = [NSData dataWithContentsOfFile:path];
+  if (data == nil && file_exists) {
+    auth_status = kDenied;
+  } else if (file_exists) {
+    auth_status = kAuthorized;
   }
 
   return auth_status;
@@ -322,9 +275,13 @@ std::string FDAAuthStatus() {
 // Screen Capture access.
 std::string ScreenAuthStatus() {
   std::string auth_status = kNotDetermined;
-  if (@available(macOS 11.0, *)) {
-    auth_status = CGPreflightScreenCaptureAccess() ? kAuthorized : kDenied;
-  } else {
+  if (@available(macOS 10.16, *)) {
+    if (CGPreflightScreenCaptureAccess()) {
+      auth_status = kAuthorized;
+    } else {
+      auth_status = kDenied;
+    }
+  } else if (@available(macOS 10.15, *)) {
     auth_status = kDenied;
     NSRunningApplication *runningApplication =
         NSRunningApplication.currentApplication;
@@ -360,6 +317,8 @@ std::string ScreenAuthStatus() {
       }
     }
     CFRelease(windowList);
+  } else {
+    auth_status = kAuthorized;
   }
 
   return auth_status;
@@ -368,51 +327,35 @@ std::string ScreenAuthStatus() {
 // Returns a status indicating whether the user has authorized
 // Camera/Microphone access.
 std::string MediaAuthStatus(const std::string &type) {
-  AVMediaType media_type =
-      (type == "microphone") ? AVMediaTypeAudio : AVMediaTypeVideo;
+  if (@available(macOS 10.14, *)) {
+    AVMediaType media_type =
+        (type == "microphone") ? AVMediaTypeAudio : AVMediaTypeVideo;
 
-  switch ([AVCaptureDevice authorizationStatusForMediaType:media_type]) {
-  case AVAuthorizationStatusAuthorized:
-    return kAuthorized;
-  case AVAuthorizationStatusDenied:
-    return kDenied;
-  case AVAuthorizationStatusRestricted:
-    return kRestricted;
-  default:
-    return kNotDetermined;
+    switch ([AVCaptureDevice authorizationStatusForMediaType:media_type]) {
+    case AVAuthorizationStatusAuthorized:
+      return kAuthorized;
+    case AVAuthorizationStatusDenied:
+      return kDenied;
+    case AVAuthorizationStatusRestricted:
+      return kRestricted;
+    default:
+      return kNotDetermined;
+    }
   }
+
+  return kAuthorized;
 }
 
 // Returns a status indicating whether the user has authorized speech
 // recognition access.
 std::string SpeechRecognitionAuthStatus() {
-  SFSpeechRecognizerAuthorizationStatus status =
-      [SFSpeechRecognizer authorizationStatus];
-  return StringFromSpeechRecognitionStatus(status);
-}
-
-// Returns a status indicating whether the user has authorized
-// Notifications access.
-std::string NotificationAuthStatus() {
-  NSURL *bundle_url = [[NSBundle mainBundle] bundleURL];
-  if (!IsValidBundleID([bundle_url path])) {
-    return kNotDetermined;
+  if (@available(macOS 10.15, *)) {
+    SFSpeechRecognizerAuthorizationStatus status =
+        [SFSpeechRecognizer authorizationStatus];
+    return StringFromSpeechRecognitionStatus(status);
   }
 
-  __block std::string ret = "not determined";
-  dispatch_group_t g = dispatch_group_create();
-  dispatch_group_enter(g);
-
-  UNUserNotificationCenter *center =
-      [UNUserNotificationCenter currentNotificationCenter];
-  [center getNotificationSettingsWithCompletionHandler:^(
-              UNNotificationSettings *settings) {
-    ret = StringFromNotificationStatus(settings.authorizationStatus);
-    dispatch_group_leave(g);
-  }];
-
-  dispatch_group_wait(g, DISPATCH_TIME_FOREVER);
-  return ret;
+  return kAuthorized;
 }
 
 // Returns a status indicating whether the user has authorized location
@@ -483,51 +426,9 @@ Napi::Value GetAuthStatus(const Napi::CallbackInfo &info) {
     auth_status = MusicLibraryAuthStatus();
   } else if (type == "input-monitoring") {
     auth_status = InputMonitoringAuthStatus();
-  } else if (type == "notifications") {
-    auth_status = NotificationAuthStatus();
   }
 
   return Napi::Value::From(env, auth_status);
-}
-
-// Request Apple Events access.
-Napi::Promise AskForAppleEventsAccess(const Napi::CallbackInfo &info) {
-  Napi::Env env = info.Env();
-  Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
-
-  std::string bundle_id = info[0].As<Napi::String>().Utf8Value();
-  bool should_prompt = info[1].As<Napi::Boolean>().Value() ? true : false;
-
-  if (IsValidBundleID([NSString stringWithUTF8String:bundle_id.c_str()])) {
-    std::string err_msg = "Bundle identifier: " + bundle_id + " is not valid";
-    deferred.Reject(Napi::String::New(env, err_msg));
-    return deferred.Promise();
-  }
-
-  AEDesc target_app = {typeNull, NULL};
-  OSStatus status = AECreateDesc(typeApplicationBundleID, bundle_id.c_str(),
-                                 bundle_id.length(), &target_app);
-  if (status != noErr) {
-    std::string err_msg = "Failed to query for Apple Events access";
-    deferred.Reject(Napi::String::New(env, err_msg));
-    return deferred.Promise();
-  }
-
-  status = AEDeterminePermissionToAutomateTarget(
-      &target_app, kCoreEventClass, kAEOpenDocuments, should_prompt);
-
-  AEDisposeDesc(&target_app);
-
-  // User prompt has not yet been shown or it was cancelled.
-  if (status == errAEEventWouldRequireUserConsent ||
-      status == userCanceledErr) {
-    deferred.Resolve(Napi::String::New(env, kNotDetermined));
-  } else {
-    deferred.Resolve(
-        Napi::String::New(env, status == noErr ? kAuthorized : kDenied));
-  }
-
-  return deferred.Promise();
 }
 
 // Request access to various protected folders on the system.
@@ -562,17 +463,18 @@ Napi::Promise AskForFoldersAccess(const Napi::CallbackInfo &info) {
 Napi::Promise AskForContactsAccess(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
-  Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(
+  Napi::ThreadSafeFunction ts_fn = Napi::ThreadSafeFunction::New(
       env, Napi::Function::New(env, NoOp), "contactsCallback", 0, 1);
 
-  auto callback = [=](Napi::Env env, Napi::Function js_cb, const char *status) {
-    deferred.Resolve(Napi::String::New(env, status));
-  };
-
+  __block Napi::ThreadSafeFunction tsfn = ts_fn;
   CNContactStore *store = [CNContactStore new];
   [store
       requestAccessForEntityType:CNEntityTypeContacts
                completionHandler:^(BOOL granted, NSError *error) {
+                 auto callback = [=](Napi::Env env, Napi::Function js_cb,
+                                     const char *granted) {
+                   deferred.Resolve(Napi::String::New(env, granted));
+                 };
                  tsfn.BlockingCall(granted ? "authorized" : "denied", callback);
                  tsfn.Release();
                }];
@@ -584,28 +486,21 @@ Napi::Promise AskForContactsAccess(const Napi::CallbackInfo &info) {
 Napi::Promise AskForCalendarAccess(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
-  Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(
+  Napi::ThreadSafeFunction ts_fn = Napi::ThreadSafeFunction::New(
       env, Napi::Function::New(env, NoOp), "calendarCallback", 0, 1);
 
-  auto callback = [=](Napi::Env env, Napi::Function js_cb, const char *status) {
-    deferred.Resolve(Napi::String::New(env, status));
-  };
-
-  EKEventStoreRequestAccessCompletionHandler handler =
-      ^(BOOL granted, NSError *error) {
-        tsfn.BlockingCall(granted ? "authorized" : "denied", callback);
-        tsfn.Release();
-      };
-
-  EKEventStore *store = [EKEventStore new];
-  if (@available(macOS 14.0, *)) {
-    const std::string level = info[0].As<Napi::String>().Utf8Value();
-    (level == "full"
-         ? [store requestFullAccessToEventsWithCompletion:handler]
-         : [store requestWriteOnlyAccessToEventsWithCompletion:handler]);
-  } else {
-    [store requestAccessToEntityType:EKEntityTypeEvent completion:handler];
-  }
+  __block Napi::ThreadSafeFunction tsfn = ts_fn;
+  [[EKEventStore new]
+      requestAccessToEntityType:EKEntityTypeEvent
+                     completion:^(BOOL granted, NSError *error) {
+                       auto callback = [=](Napi::Env env, Napi::Function js_cb,
+                                           const char *granted) {
+                         deferred.Resolve(Napi::String::New(env, granted));
+                       };
+                       tsfn.BlockingCall(granted ? "authorized" : "denied",
+                                         callback);
+                       tsfn.Release();
+                     }];
 
   return deferred.Promise();
 }
@@ -614,25 +509,22 @@ Napi::Promise AskForCalendarAccess(const Napi::CallbackInfo &info) {
 Napi::Promise AskForRemindersAccess(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
-  Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(
+  Napi::ThreadSafeFunction ts_fn = Napi::ThreadSafeFunction::New(
       env, Napi::Function::New(env, NoOp), "remindersCallback", 0, 1);
 
-  auto callback = [=](Napi::Env env, Napi::Function js_cb, const char *status) {
-    deferred.Resolve(Napi::String::New(env, status));
-  };
-
-  EKEventStoreRequestAccessCompletionHandler handler =
-      ^(BOOL granted, NSError *error) {
-        tsfn.BlockingCall(granted ? "authorized" : "denied", callback);
-        tsfn.Release();
-      };
-
-  EKEventStore *store = [EKEventStore new];
-  if (@available(macOS 14.0, *)) {
-    [store requestFullAccessToRemindersWithCompletion:handler];
-  } else {
-    [store requestAccessToEntityType:EKEntityTypeReminder completion:handler];
-  }
+  __block Napi::ThreadSafeFunction tsfn = ts_fn;
+  [[EKEventStore new]
+      requestAccessToEntityType:EKEntityTypeReminder
+                     completion:^(BOOL granted, NSError *error) {
+                       auto callback = [=](Napi::Env env,
+                                           Napi::Function prom_cb,
+                                           const char *granted) {
+                         deferred.Resolve(Napi::String::New(env, granted));
+                       };
+                       tsfn.BlockingCall(granted ? "authorized" : "denied",
+                                         callback);
+                       tsfn.Release();
+                     }];
 
   return deferred.Promise();
 }
@@ -646,28 +538,38 @@ void AskForFullDiskAccess(const Napi::CallbackInfo &info) {
 Napi::Promise AskForCameraAccess(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
-  Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(
+  Napi::ThreadSafeFunction ts_fn = Napi::ThreadSafeFunction::New(
       env, Napi::Function::New(env, NoOp), "cameraCallback", 0, 1);
 
-  auto callback = [=](Napi::Env env, Napi::Function js_cb, const char *status) {
-    deferred.Resolve(Napi::String::New(env, status));
-  };
+  if (@available(macOS 10.14, *)) {
+    std::string auth_status = MediaAuthStatus("camera");
 
-  std::string auth_status = MediaAuthStatus("camera");
+    if (auth_status == kNotDetermined) {
+      __block Napi::ThreadSafeFunction tsfn = ts_fn;
+      [AVCaptureDevice
+          requestAccessForMediaType:AVMediaTypeVideo
+                  completionHandler:^(BOOL granted) {
+                    auto callback = [=](Napi::Env env, Napi::Function js_cb,
+                                        const char *granted) {
+                      deferred.Resolve(Napi::String::New(env, granted));
+                    };
 
-  if (auth_status == kNotDetermined) {
-    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo
-                             completionHandler:^(BOOL granted) {
-                               tsfn.BlockingCall(
-                                   granted ? "authorized" : "denied", callback);
-                               tsfn.Release();
-                             }];
-  } else {
-    if (auth_status == kDenied)
+                    tsfn.BlockingCall(granted ? "authorized" : "denied",
+                                      callback);
+                    tsfn.Release();
+                  }];
+    } else if (auth_status == kDenied) {
       OpenPrefPane("Privacy_Camera");
 
-    tsfn.Release();
-    deferred.Resolve(Napi::String::New(env, auth_status));
+      ts_fn.Release();
+      deferred.Resolve(Napi::String::New(env, kDenied));
+    } else {
+      ts_fn.Release();
+      deferred.Resolve(Napi::String::New(env, auth_status));
+    }
+  } else {
+    ts_fn.Release();
+    deferred.Resolve(Napi::String::New(env, kAuthorized));
   }
 
   return deferred.Promise();
@@ -677,28 +579,36 @@ Napi::Promise AskForCameraAccess(const Napi::CallbackInfo &info) {
 Napi::Promise AskForSpeechRecognitionAccess(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
-  Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(
+  Napi::ThreadSafeFunction ts_fn = Napi::ThreadSafeFunction::New(
       env, Napi::Function::New(env, NoOp), "speechRecognitionCallback", 0, 1);
 
-  auto callback = [=](Napi::Env env, Napi::Function js_cb, const char *status) {
-    deferred.Resolve(Napi::String::New(env, status));
-  };
+  if (@available(macOS 10.15, *)) {
+    std::string auth_status = SpeechRecognitionAuthStatus();
 
-  std::string auth_status = SpeechRecognitionAuthStatus();
-
-  if (auth_status == kNotDetermined) {
-    [SFSpeechRecognizer
-        requestAuthorization:^(SFSpeechRecognizerAuthorizationStatus status) {
-          std::string auth_result = StringFromSpeechRecognitionStatus(status);
-          tsfn.BlockingCall(auth_result.c_str(), callback);
-          tsfn.Release();
-        }];
-  } else {
-    if (auth_status == kDenied)
+    if (auth_status == kNotDetermined) {
+      __block Napi::ThreadSafeFunction tsfn = ts_fn;
+      [SFSpeechRecognizer
+          requestAuthorization:^(SFSpeechRecognizerAuthorizationStatus status) {
+            auto callback = [=](Napi::Env env, Napi::Function js_cb,
+                                const char *granted) {
+              deferred.Resolve(Napi::String::New(env, granted));
+            };
+            std::string auth_result = StringFromSpeechRecognitionStatus(status);
+            tsfn.BlockingCall(auth_result.c_str(), callback);
+            tsfn.Release();
+          }];
+    } else if (auth_status == kDenied) {
       OpenPrefPane("Privacy_SpeechRecognition");
 
-    tsfn.Release();
-    deferred.Resolve(Napi::String::New(env, auth_status));
+      ts_fn.Release();
+      deferred.Resolve(Napi::String::New(env, kDenied));
+    } else {
+      ts_fn.Release();
+      deferred.Resolve(Napi::String::New(env, auth_status));
+    }
+  } else {
+    ts_fn.Release();
+    deferred.Resolve(Napi::String::New(env, kAuthorized));
   }
 
   return deferred.Promise();
@@ -708,22 +618,25 @@ Napi::Promise AskForSpeechRecognitionAccess(const Napi::CallbackInfo &info) {
 Napi::Promise AskForPhotosAccess(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
-  Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(
+  Napi::ThreadSafeFunction ts_fn = Napi::ThreadSafeFunction::New(
       env, Napi::Function::New(env, NoOp), "photosCallback", 0, 1);
 
   std::string access_level = info[0].As<Napi::String>().Utf8Value();
   std::string auth_status = PhotosAuthStatus(access_level);
 
-  auto callback = [=](Napi::Env env, Napi::Function js_cb,
-                      const char *granted) {
-    deferred.Resolve(Napi::String::New(env, granted));
-  };
-
   if (auth_status == kNotDetermined) {
+    __block Napi::ThreadSafeFunction tsfn = ts_fn;
     if (@available(macOS 10.16, *)) {
       [PHPhotoLibrary
           requestAuthorizationForAccessLevel:GetPHAccessLevel(access_level)
                                      handler:^(PHAuthorizationStatus status) {
+                                       auto callback =
+                                           [=](Napi::Env env,
+                                               Napi::Function js_cb,
+                                               const char *granted) {
+                                             deferred.Resolve(Napi::String::New(
+                                                 env, granted));
+                                           };
                                        tsfn.BlockingCall(
                                            StringFromPhotosStatus(status)
                                                .c_str(),
@@ -732,18 +645,23 @@ Napi::Promise AskForPhotosAccess(const Napi::CallbackInfo &info) {
                                      }];
     } else {
       [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status) {
+        auto callback = [=](Napi::Env env, Napi::Function js_cb,
+                            const char *granted) {
+          deferred.Resolve(Napi::String::New(env, granted));
+        };
         tsfn.BlockingCall(StringFromPhotosStatus(status).c_str(), callback);
         tsfn.Release();
       }];
     }
-  } else {
-    if (auth_status == kDenied)
-      OpenPrefPane("Privacy_Photos");
+  } else if (auth_status == kDenied) {
+    OpenPrefPane("Privacy_Photos");
 
-    tsfn.Release();
+    ts_fn.Release();
+    deferred.Resolve(Napi::String::New(env, kDenied));
+  } else {
+    ts_fn.Release();
     deferred.Resolve(Napi::String::New(env, auth_status));
   }
-
   return deferred.Promise();
 }
 
@@ -751,28 +669,38 @@ Napi::Promise AskForPhotosAccess(const Napi::CallbackInfo &info) {
 Napi::Promise AskForMicrophoneAccess(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
-  Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(
+  Napi::ThreadSafeFunction ts_fn = Napi::ThreadSafeFunction::New(
       env, Napi::Function::New(env, NoOp), "microphoneCallback", 0, 1);
 
-  auto callback = [=](Napi::Env env, Napi::Function js_cb, const char *status) {
-    deferred.Resolve(Napi::String::New(env, status));
-  };
+  if (@available(macOS 10.14, *)) {
+    std::string auth_status = MediaAuthStatus("microphone");
 
-  std::string auth_status = MediaAuthStatus("microphone");
+    if (auth_status == kNotDetermined) {
+      __block Napi::ThreadSafeFunction tsfn = ts_fn;
+      [AVCaptureDevice
+          requestAccessForMediaType:AVMediaTypeAudio
+                  completionHandler:^(BOOL granted) {
+                    auto callback = [=](Napi::Env env, Napi::Function js_cb,
+                                        const char *granted) {
+                      deferred.Resolve(Napi::String::New(env, granted));
+                    };
 
-  if (auth_status == kNotDetermined) {
-    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio
-                             completionHandler:^(BOOL granted) {
-                               tsfn.BlockingCall(
-                                   granted ? "authorized" : "denied", callback);
-                               tsfn.Release();
-                             }];
-  } else {
-    if (auth_status == kDenied)
+                    tsfn.BlockingCall(granted ? "authorized" : "denied",
+                                      callback);
+                    tsfn.Release();
+                  }];
+    } else if (auth_status == kDenied) {
       OpenPrefPane("Privacy_Microphone");
 
-    tsfn.Release();
-    deferred.Resolve(Napi::String::New(env, auth_status));
+      ts_fn.Release();
+      deferred.Resolve(Napi::String::New(env, kDenied));
+    } else {
+      ts_fn.Release();
+      deferred.Resolve(Napi::String::New(env, auth_status));
+    }
+  } else {
+    ts_fn.Release();
+    deferred.Resolve(Napi::String::New(env, kAuthorized));
   }
 
   return deferred.Promise();
@@ -783,16 +711,21 @@ Napi::Promise AskForInputMonitoringAccess(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
-  std::string access_level = info[0].As<Napi::String>().Utf8Value();
-  std::string auth_status = InputMonitoringAuthStatus();
+  if (@available(macOS 10.15, *)) {
+    std::string auth_status = InputMonitoringAuthStatus();
 
-  if (auth_status == kNotDetermined) {
-    IOHIDRequestAccess(GetInputMonitoringAccessType(access_level));
-    deferred.Resolve(Napi::String::New(env, kDenied));
-  } else {
-    if (auth_status == kDenied)
+    if (auth_status == kNotDetermined) {
+      IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
+      deferred.Resolve(Napi::String::New(env, kDenied));
+    } else if (auth_status == kDenied) {
       OpenPrefPane("Privacy_ListenEvent");
-    deferred.Resolve(Napi::String::New(env, auth_status));
+
+      deferred.Resolve(Napi::String::New(env, kDenied));
+    } else {
+      deferred.Resolve(Napi::String::New(env, auth_status));
+    }
+  } else {
+    deferred.Resolve(Napi::String::New(env, kAuthorized));
   }
 
   return deferred.Promise();
@@ -802,32 +735,35 @@ Napi::Promise AskForInputMonitoringAccess(const Napi::CallbackInfo &info) {
 Napi::Promise AskForMusicLibraryAccess(const Napi::CallbackInfo &info) {
   Napi::Env env = info.Env();
   Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
-  Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(
+  Napi::ThreadSafeFunction ts_fn = Napi::ThreadSafeFunction::New(
       env, Napi::Function::New(env, NoOp), "musicLibraryCallback", 0, 1);
-
-  auto callback = [=](Napi::Env env, Napi::Function js_cb, const char *status) {
-    deferred.Resolve(Napi::String::New(env, status));
-  };
 
   if (@available(macOS 10.16, *)) {
     std::string auth_status = MusicLibraryAuthStatus();
 
     if (auth_status == kNotDetermined) {
+      __block Napi::ThreadSafeFunction tsfn = ts_fn;
       [SKCloudServiceController
           requestAuthorization:^(SKCloudServiceAuthorizationStatus status) {
+            auto callback = [=](Napi::Env env, Napi::Function js_cb,
+                                const char *granted) {
+              deferred.Resolve(Napi::String::New(env, granted));
+            };
             tsfn.BlockingCall(StringFromMusicLibraryStatus(status).c_str(),
                               callback);
             tsfn.Release();
           }];
-    } else {
-      if (auth_status == kDenied)
-        OpenPrefPane("Privacy_Media");
+    } else if (auth_status == kDenied) {
+      OpenPrefPane("Privacy_Media");
 
-      tsfn.Release();
+      ts_fn.Release();
+      deferred.Resolve(Napi::String::New(env, kDenied));
+    } else {
+      ts_fn.Release();
       deferred.Resolve(Napi::String::New(env, auth_status));
     }
   } else {
-    tsfn.Release();
+    ts_fn.Release();
     deferred.Resolve(Napi::String::New(env, kAuthorized));
   }
 
@@ -837,48 +773,42 @@ Napi::Promise AskForMusicLibraryAccess(const Napi::CallbackInfo &info) {
 // Request Screen Capture Access.
 void AskForScreenCaptureAccess(const Napi::CallbackInfo &info) {
   if (@available(macOS 11.0, *)) {
-    if (CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess())
-      return;
-
-    bool should_force_prefs = info[0].As<Napi::Boolean>().Value();
-    if (should_force_prefs && !HasOpenSystemPreferencesDialog()) {
-      OpenPrefPane("Privacy_ScreenCapture");
+    // Check if screen capture access is already granted
+    bool hasAccess = CGPreflightScreenCaptureAccess();
+    if (!hasAccess) {
+      bool requested = CGRequestScreenCaptureAccess();
+      // If the system prompt does not appear (already denied this session)
+      if (!requested) {
+        // Suggest user to manually enable permission
+        if (!HasOpenSystemPreferencesDialog()) {
+          OpenPrefPane("Privacy_ScreenCapture");
+        }
+        // Optionally, alert user: "After granting the permission, please quit and reopen the app."
+      }
     }
-  } else {
-    // Tries to create a capture stream. This is necessary to add the app back
-    // to the list in sysprefs if the user previously denied.
-    // https://stackoverflow.com/questions/56597221/detecting-screen-recording-settings-on-macos-catalina
+    // If access granted, proceed as normal
+  }
+  else if (@available(macOS 10.15, *)) {
+    // For Catalina, try to trigger system prompt via dummy capture stream
     CGDisplayStreamRef stream = CGDisplayStreamCreate(
-        CGMainDisplayID(), 1, 1, kCVPixelFormatType_32BGRA, NULL,
-        ^(CGDisplayStreamFrameStatus status, uint64_t displayTime,
-          IOSurfaceRef frameSurface, CGDisplayStreamUpdateRef updateRef){
-        });
-
+      CGMainDisplayID(), 1, 1, kCVPixelFormatType_32BGRA, NULL,
+      ^(CGDisplayStreamFrameStatus status, uint64_t displayTime,
+        IOSurfaceRef frameSurface, CGDisplayStreamUpdateRef updateRef) {
+      });
     if (stream) {
       CFRelease(stream);
     } else {
-      if (!HasOpenSystemPreferencesDialog())
+      if (!HasOpenSystemPreferencesDialog()) {
         OpenPrefPane("Privacy_ScreenCapture");
+      }
+      // Again, suggest restart after granting permission
     }
+  }
+  else {
+    // For older macOS versions, no action needed
   }
 }
 
-// Request Location access.
-void AskForLocationAccess(const Napi::CallbackInfo &info) {
-  std::string auth_status = LocationAuthStatus();
-
-  if (auth_status == kNotDetermined) {
-    CLLocationManager *location_manager = [[CLLocationManager alloc] init];
-    const std::string access_level = info[0].As<Napi::String>().Utf8Value();
-    if (access_level == "always") {
-      [location_manager requestAlwaysAuthorization];
-    } else if (access_level == "when-in-use") {
-      [location_manager requestWhenInUseAuthorization];
-    }
-  } else if (auth_status == kDenied) {
-    OpenPrefPane("Privacy_Location");
-  }
-}
 
 // Request Accessibility Access.
 void AskForAccessibilityAccess(const Napi::CallbackInfo &info) {
@@ -890,40 +820,46 @@ void AskForAccessibilityAccess(const Napi::CallbackInfo &info) {
   }
 }
 
+void WorkspaceOpenURL(const Napi::CallbackInfo &info) {
+  const std::string path = info[0].As<Napi::String>().Utf8Value();
+  NSWorkspace *workspace = [[NSWorkspace alloc] init];
+  NSString *pref_string = [NSString stringWithFormat:@"%s", path.c_str()];
+  [workspace openURL:[NSURL URLWithString:pref_string]];
+}
+
 // Initializes all functions exposed to JS
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
-  exports.Set(Napi::String::New(env, "askForAccessibilityAccess"),
-              Napi::Function::New(env, AskForAccessibilityAccess));
-  exports.Set(Napi::String::New(env, "askForAppleEventsAccess"),
-              Napi::Function::New(env, AskForAppleEventsAccess));
-  exports.Set(Napi::String::New(env, "askForCalendarAccess"),
-              Napi::Function::New(env, AskForCalendarAccess));
-  exports.Set(Napi::String::New(env, "askForCameraAccess"),
-              Napi::Function::New(env, AskForCameraAccess));
+  exports.Set(Napi::String::New(env, "openURL"),
+              Napi::Function::New(env, WorkspaceOpenURL));
+  exports.Set(Napi::String::New(env, "getAuthStatus"),
+              Napi::Function::New(env, GetAuthStatus));
   exports.Set(Napi::String::New(env, "askForContactsAccess"),
               Napi::Function::New(env, AskForContactsAccess));
+  exports.Set(Napi::String::New(env, "askForCalendarAccess"),
+              Napi::Function::New(env, AskForCalendarAccess));
+  exports.Set(Napi::String::New(env, "askForRemindersAccess"),
+              Napi::Function::New(env, AskForRemindersAccess));
   exports.Set(Napi::String::New(env, "askForFoldersAccess"),
               Napi::Function::New(env, AskForFoldersAccess));
   exports.Set(Napi::String::New(env, "askForFullDiskAccess"),
               Napi::Function::New(env, AskForFullDiskAccess));
-  exports.Set(Napi::String::New(env, "askForInputMonitoringAccess"),
-              Napi::Function::New(env, AskForInputMonitoringAccess));
-  exports.Set(Napi::String::New(env, "askForLocationAccess"),
-              Napi::Function::New(env, AskForLocationAccess));
+  exports.Set(Napi::String::New(env, "askForCameraAccess"),
+              Napi::Function::New(env, AskForCameraAccess));
   exports.Set(Napi::String::New(env, "askForMicrophoneAccess"),
               Napi::Function::New(env, AskForMicrophoneAccess));
   exports.Set(Napi::String::New(env, "askForMusicLibraryAccess"),
               Napi::Function::New(env, AskForMusicLibraryAccess));
-  exports.Set(Napi::String::New(env, "askForPhotosAccess"),
-              Napi::Function::New(env, AskForPhotosAccess));
-  exports.Set(Napi::String::New(env, "askForRemindersAccess"),
-              Napi::Function::New(env, AskForRemindersAccess));
-  exports.Set(Napi::String::New(env, "askForScreenCaptureAccess"),
-              Napi::Function::New(env, AskForScreenCaptureAccess));
   exports.Set(Napi::String::New(env, "askForSpeechRecognitionAccess"),
               Napi::Function::New(env, AskForSpeechRecognitionAccess));
-  exports.Set(Napi::String::New(env, "getAuthStatus"),
-              Napi::Function::New(env, GetAuthStatus));
+  exports.Set(Napi::String::New(env, "askForPhotosAccess"),
+              Napi::Function::New(env, AskForPhotosAccess));
+  exports.Set(Napi::String::New(env, "askForScreenCaptureAccess"),
+              Napi::Function::New(env, AskForScreenCaptureAccess));
+  exports.Set(Napi::String::New(env, "askForAccessibilityAccess"),
+              Napi::Function::New(env, AskForAccessibilityAccess));
+  exports.Set(Napi::String::New(env, "askForInputMonitoringAccess"),
+              Napi::Function::New(env, AskForInputMonitoringAccess));
+
   return exports;
 }
 
