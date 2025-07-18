@@ -837,13 +837,20 @@ Napi::Promise AskForMusicLibraryAccess(const Napi::CallbackInfo &info) {
 // Request Screen Capture Access.
 void AskForScreenCaptureAccess(const Napi::CallbackInfo &info) {
   if (@available(macOS 11.0, *)) {
-    if (CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess())
-      return;
-
-    bool should_force_prefs = info[0].As<Napi::Boolean>().Value();
-    if (should_force_prefs && !HasOpenSystemPreferencesDialog()) {
-      OpenPrefPane("Privacy_ScreenCapture");
+    // Check if screen capture access is already granted
+    bool hasAccess = CGPreflightScreenCaptureAccess();
+    if (!hasAccess) {
+      bool requested = CGRequestScreenCaptureAccess();
+      // If the system prompt does not appear (already denied this session)
+      if (!requested) {
+        // Suggest user to manually enable permission
+        if (!HasOpenSystemPreferencesDialog()) {
+          OpenPrefPane("Privacy_ScreenCapture");
+        }
+        // Optionally, alert user: "After granting the permission, please quit and reopen the app."
+      }
     }
+    // If access granted, proceed as normal
   } else {
     // Tries to create a capture stream. This is necessary to add the app back
     // to the list in sysprefs if the user previously denied.
