@@ -13,6 +13,7 @@
 #import <Photos/Photos.h>
 #import <Speech/Speech.h>
 #import <Storekit/Storekit.h>
+#import <UserNotifications/UserNotifications.h>
 #import <pwd.h>
 
 /***** HELPER FUNCTIONS *****/
@@ -212,6 +213,42 @@ std::string InputMonitoringAuthStatus() {
     }
   }
 
+  return kAuthorized;
+}
+
+std::string NotificationAuthStatus() {
+  // NSUserNotificationCenter doesn't have an authorizationStatus property
+  // Check if notifications are enabled using UNUserNotificationCenter instead
+  if (@available(macOS 10.14, *)) {
+    // For macOS 10.14+ (Mojave and later)
+    UNUserNotificationCenter *center =
+        [UNUserNotificationCenter currentNotificationCenter];
+    __block dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    __block std::string status = kNotDetermined;
+
+    [center getNotificationSettingsWithCompletionHandler:^(
+                UNNotificationSettings *_Nonnull settings) {
+      if (settings.authorizationStatus == UNAuthorizationStatusAuthorized) {
+        status = kAuthorized;
+      } else if (settings.authorizationStatus == UNAuthorizationStatusDenied) {
+        status = kDenied;
+      } else if (settings.authorizationStatus ==
+                 UNAuthorizationStatusProvisional) {
+        status = kAuthorized; // Consider provisional as authorized
+      } else {
+        status = kNotDetermined;
+      }
+      dispatch_semaphore_signal(semaphore);
+    }];
+
+    // Wait for the async call to complete
+    dispatch_semaphore_wait(semaphore,
+                            dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC));
+    return status;
+  }
+
+  // For older macOS versions, always return authorized as there's no formal
+  // permission system
   return kAuthorized;
 }
 
@@ -426,9 +463,54 @@ Napi::Value GetAuthStatus(const Napi::CallbackInfo &info) {
     auth_status = MusicLibraryAuthStatus();
   } else if (type == "input-monitoring") {
     auth_status = InputMonitoringAuthStatus();
+  } else if (type == "notifications") {
+    auth_status = NotificationAuthStatus();
   }
 
   return Napi::Value::From(env, auth_status);
+}
+
+// Request Notification Access
+Napi::Promise AskForNotificationAccess(const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
+  Napi::ThreadSafeFunction ts_fn = Napi::ThreadSafeFunction::New(
+      env, Napi::Function::New(env, NoOp), "notificationCallback", 0, 1);
+
+  if (@available(macOS 10.14, *)) {
+    __block Napi::ThreadSafeFunction tsfn = ts_fn;
+    UNUserNotificationCenter *center =
+        [UNUserNotificationCenter currentNotificationCenter];
+
+    // Request authorization with sound, alert, and badge
+    [center
+        requestAuthorizationWithOptions:(UNAuthorizationOptionSound |
+                                         UNAuthorizationOptionAlert |
+                                         UNAuthorizationOptionBadge)
+                      completionHandler:^(BOOL granted,
+                                          NSError *_Nullable error) {
+                        auto callback = [=](Napi::Env env, Napi::Function js_cb,
+                                            const char *result) {
+                          deferred.Resolve(Napi::String::New(env, result));
+                        };
+
+                        // If there was an error, log it
+                        if (error) {
+                          NSLog(@"Error requesting notification authorization: "
+                                @"%@",
+                                error);
+                        }
+
+                        tsfn.BlockingCall(granted ? "authorized" : "denied",
+                                          callback);
+                        tsfn.Release();
+                      }];
+  } else {
+    ts_fn.Release();
+    deferred.Resolve(Napi::String::New(env, kAuthorized));
+  }
+
+  return deferred.Promise();
 }
 
 // Request access to various protected folders on the system.
@@ -783,18 +865,18 @@ void AskForScreenCaptureAccess(const Napi::CallbackInfo &info) {
         if (!HasOpenSystemPreferencesDialog()) {
           OpenPrefPane("Privacy_ScreenCapture");
         }
-        // Optionally, alert user: "After granting the permission, please quit and reopen the app."
+        // Optionally, alert user: "After granting the permission, please quit
+        // and reopen the app."
       }
     }
     // If access granted, proceed as normal
-  }
-  else if (@available(macOS 10.15, *)) {
+  } else if (@available(macOS 10.15, *)) {
     // For Catalina, try to trigger system prompt via dummy capture stream
     CGDisplayStreamRef stream = CGDisplayStreamCreate(
-      CGMainDisplayID(), 1, 1, kCVPixelFormatType_32BGRA, NULL,
-      ^(CGDisplayStreamFrameStatus status, uint64_t displayTime,
-        IOSurfaceRef frameSurface, CGDisplayStreamUpdateRef updateRef) {
-      });
+        CGMainDisplayID(), 1, 1, kCVPixelFormatType_32BGRA, NULL,
+        ^(CGDisplayStreamFrameStatus status, uint64_t displayTime,
+          IOSurfaceRef frameSurface, CGDisplayStreamUpdateRef updateRef){
+        });
     if (stream) {
       CFRelease(stream);
     } else {
@@ -803,12 +885,10 @@ void AskForScreenCaptureAccess(const Napi::CallbackInfo &info) {
       }
       // Again, suggest restart after granting permission
     }
-  }
-  else {
+  } else {
     // For older macOS versions, no action needed
   }
 }
-
 
 // Request Accessibility Access.
 void AskForAccessibilityAccess(const Napi::CallbackInfo &info) {
@@ -859,6 +939,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, AskForAccessibilityAccess));
   exports.Set(Napi::String::New(env, "askForInputMonitoringAccess"),
               Napi::Function::New(env, AskForInputMonitoringAccess));
+  exports.Set(Napi::String::New(env, "askForNotificationAccess"),
+              Napi::Function::New(env, AskForNotificationAccess));
 
   return exports;
 }
