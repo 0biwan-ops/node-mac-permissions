@@ -478,33 +478,43 @@ Napi::Promise AskForNotificationAccess(const Napi::CallbackInfo &info) {
       env, Napi::Function::New(env, NoOp), "notificationCallback", 0, 1);
 
   if (@available(macOS 10.14, *)) {
-    __block Napi::ThreadSafeFunction tsfn = ts_fn;
+    std::string auth_status = NotificationAuthStatus();
     UNUserNotificationCenter *center =
         [UNUserNotificationCenter currentNotificationCenter];
 
-    // Request authorization with sound, alert, and badge
-    [center
-        requestAuthorizationWithOptions:(UNAuthorizationOptionSound |
-                                         UNAuthorizationOptionAlert |
-                                         UNAuthorizationOptionBadge)
-                      completionHandler:^(BOOL granted,
-                                          NSError *_Nullable error) {
-                        auto callback = [=](Napi::Env env, Napi::Function js_cb,
-                                            const char *result) {
-                          deferred.Resolve(Napi::String::New(env, result));
-                        };
+    if (auth_status == kNotDetermined) {
+      __block Napi::ThreadSafeFunction tsfn = ts_fn;
+      [center
+          requestAuthorizationWithOptions:(UNAuthorizationOptionSound |
+                                           UNAuthorizationOptionAlert |
+                                           UNAuthorizationOptionBadge)
+                        completionHandler:^(BOOL granted,
+                                            NSError *_Nullable error) {
+                          auto callback = [=](Napi::Env env,
+                                              Napi::Function js_cb,
+                                              const char *result) {
+                            deferred.Resolve(Napi::String::New(env, result));
+                          };
+                          if (error) {
+                            NSLog(@"Error requesting notification "
+                                  @"authorization: %@",
+                                  error);
+                            tsfn.BlockingCall("denied", callback);
+                          } else {
+                            tsfn.BlockingCall(granted ? "authorized" : "denied",
+                                              callback);
+                          }
+                          tsfn.Release();
+                        }];
+    } else if (auth_status == kDenied) {
+      OpenPrefPane("Privacy_Notifications");
 
-                        // If there was an error, log it
-                        if (error) {
-                          NSLog(@"Error requesting notification authorization: "
-                                @"%@",
-                                error);
-                        }
-
-                        tsfn.BlockingCall(granted ? "authorized" : "denied",
-                                          callback);
-                        tsfn.Release();
-                      }];
+      ts_fn.Release();
+      deferred.Resolve(Napi::String::New(env, kDenied));
+    } else {
+      ts_fn.Release();
+      deferred.Resolve(Napi::String::New(env, auth_status));
+    }
   } else {
     ts_fn.Release();
     deferred.Resolve(Napi::String::New(env, kAuthorized));

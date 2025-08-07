@@ -16,6 +16,7 @@ export function askForRemindersAccess(): Promise<Omit<PermissionType, 'restricte
 export function askForSpeechRecognitionAccess(): Promise<Omit<PermissionType, 'restricted'>>
 export function askForScreenCaptureAccess(openPreferences?: boolean): undefined
 export function getAuthStatus(authType: AuthType): PermissionType | 'not determined' | 'provisional' | 'limited'
+export function askForNotificationsAccess(): Promise<PermissionType>
 
 export type AuthType =
   | 'accessibility'
@@ -34,5 +35,6 @@ export type AuthType =
   | 'reminders'
   | 'speech-recognition'
   | 'screen'
+  | 'notifications'
 
 export type PermissionType =  'authorized' | 'denied' | 'restricted'

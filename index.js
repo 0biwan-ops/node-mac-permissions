@@ -19,6 +19,7 @@ function getAuthStatus(type) {
     'reminders',
     'speech-recognition',
     'screen',
+    'notifications',
   ]
 
   if (!validTypes.includes(type)) {
@@ -90,7 +91,12 @@ function askForAppleEventsAccess(targetAppBundleId, shouldPrompt = true) {
   return permissions.askForAppleEventsAccess.call(this, targetAppBundleId, shouldPrompt)
 }
 
+function askForNotificationsAccess() {
+  return permissions.askForNotificationsAccess.call(this)
+}
+
 module.exports = {
+  askForNotificationsAccess: askForNotificationsAccess,
   askForAppleEventsAccess: askForAppleEventsAccess,
   askForAccessibilityAccess: permissions.askForAccessibilityAccess,
   askForCalendarAccess: askForCalendarAccess,
