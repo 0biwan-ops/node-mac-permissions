@@ -92,7 +92,7 @@ function askForAppleEventsAccess(targetAppBundleId, shouldPrompt = true) {
 }
 
 function askForNotificationsAccess() {
-  return permissions.askForNotificationsAccess.call(this)
+  return permissions.askForNotificationAccess.call(this)
 }
 
 module.exports = {

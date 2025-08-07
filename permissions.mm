@@ -85,11 +85,22 @@ StringFromSpeechRecognitionStatus(SFSpeechRecognizerAuthorizationStatus status)
 
 // Open a specific pane in System Preferences Security and Privacy.
 void OpenPrefPane(const std::string &pane_string) {
-  NSWorkspace *workspace = [[NSWorkspace alloc] init];
-  NSString *pref_string = [NSString
-      stringWithFormat:
-          @"x-apple.systempreferences:com.apple.preference.security?%s",
-          pane_string.c_str()];
+  NSWorkspace *workspace = [NSWorkspace sharedWorkspace];
+  NSString *pref_string;
+
+  // Special case for notifications which is in a different preference pane
+  if (pane_string == "Privacy_Notifications") {
+    pref_string =
+        @"x-apple.systempreferences:com.apple.preference.notifications";
+  } else {
+    pref_string = [NSString
+        stringWithFormat:
+            @"x-apple.systempreferences:com.apple.preference.security?%s",
+            pane_string.c_str()];
+  }
+
+  // Make sure this runs on the main thread because UI should not be touched on
+  // background threads
   [workspace openURL:[NSURL URLWithString:pref_string]];
 }
 
